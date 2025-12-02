@@ -202,6 +202,14 @@ class SettingsPanel(QMainWindow):
         keys = [
             "f9", "f10", "f11", "f12", "insert"
         ]
+        #self.key_combo.addItems(keys)
+        #self.key_combo.setCurrentText(CONFIG["toggle_key"])
+        #self.key_combo.currentTextChanged.connect(self.on_key_change)
+        #key_layout.addWidget(QLabel("Stlačiť:"))
+        #key_layout.addWidget(self.key_combo)
+        #key_group.setLayout(key_layout)
+        #layout.addWidget(key_group)
+
         # Tlačidlá
         btn_layout = QHBoxLayout()
         self.btn_toggle = QPushButton("👁️ Zobraziť/Skryť")
