@@ -1,24 +1,36 @@
 import sys
+import os
+import json
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QPushButton, QColorDialog, QGroupBox, QGridLayout,
-    QComboBox, QLineEdit
+    QComboBox, QLineEdit, QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtGui import QColor, QPixmap, QPainter, QBrush
 
-# Globálne nastavenia
+# =======================
+# CONFIG + TRVALÉ ÚDAJE
+# =======================
 CONFIG = {
-    "color": QColor(255, 255, 255),
+    "color": QColor("#67FF26"),  # ✅ default zelená
     "arm_length": 12,
     "arm_thickness": 2,
     "gap": 4,
-    "toggle_key": "f12",
+    "toggle_key": "c",
     "offset_x": 0,
     "offset_y": 0,
 }
 
-# === Overlay ===
+# ✅ Cesta podľa tvojej požiadavky
+SLOTS_DIR = Path("C:/krosherG")
+SLOTS_FILE = SLOTS_DIR / "crosshair_slots.json"
+
+# =======================
+# CrosshairOverlay
+# =======================
 class CrosshairOverlay(QWidget):
     def __init__(self):
         super().__init__()
@@ -62,12 +74,12 @@ class CrosshairOverlay(QWidget):
 
         # Ľavý
         painter.drawRect(center - gap - al, center - half, al, th)
-        # ✅ Pravý +1 px doprava
-        painter.drawRect(center + gap + 1, center - half, al, th)
+        # Pravý
+        painter.drawRect(center + gap, center - half, al, th)
         # Horný
         painter.drawRect(center - half, center - gap - al, th, al)
         # Dolný
-        painter.drawRect(center - half, center + gap +1, th, al)
+        painter.drawRect(center - half, center + gap, th, al)
 
     def refresh(self):
         self.update_geometry()
@@ -76,47 +88,94 @@ class CrosshairOverlay(QWidget):
             self.raise_()
 
 
-# === Globálny hotkey pomocou pynput (BEZPEČNÝ) ===
-from pynput import keyboard as pkeyboard
+# =======================
+# Náhľad crosshairu pre sloty
+# =======================
+class CrosshairPreviewWidget(QLabel):
+    def __init__(self, config, size=80):
+        super().__init__()
+        self.config = config.copy()
+        self.setFixedSize(size, size)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.update_preview()
 
-from pynput import keyboard as pkeyboard
+    def update_preview(self, new_config=None):
+        if new_config:
+            self.config = new_config.copy()
+        self.setPixmap(self._render_pixmap())
+
+    def _render_pixmap(self):
+        size = self.width()
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        c = QColor(self.config["color"])
+        al = int(self.config["arm_length"] * 0.6)
+        th = max(1, int(self.config["arm_thickness"] * 0.8))
+        gap = int(self.config["gap"] * 0.6)
+        center = size // 2
+        half = th // 2
+
+        painter.setBrush(QBrush(c))
+
+        painter.drawRect(center - gap - al, center - half, al, th)  # Ľ
+        painter.drawRect(center + gap, center - half, al, th)         # P
+        painter.drawRect(center - half, center - gap - al, th, al)    # H
+        painter.drawRect(center - half, center + gap, th, al)         # D
+
+        painter.end()
+        return pixmap
+
+
+# =======================
+# HotkeyManager (pynput)
+# =======================
+try:
+    from pynput import keyboard as pkeyboard
+except ImportError:
+    pkeyboard = None
 
 class HotkeyManager:
     def __init__(self, toggle_callback):
         self.toggle_callback = toggle_callback
         self.listener = None
         self.current_key = "f12"
-        self.start("f12")
+        if pkeyboard:
+            self.start("f12")
 
     def start(self, key_name):
         self.stop()
         self.current_key = key_name.lower().strip()
+        if not pkeyboard:
+            return
 
         def on_press(key):
             try:
-                # Pre písmená/čísla: key.char (napr. 'c')
                 if hasattr(key, 'char') and key.char == self.current_key:
                     self.toggle_callback()
-                    return  # zabráni viacnásobnému spusteniu pri dlhom stlačení
-                # Pre špeciálne klávesy: key == Key.XXX
+                    return
                 key_map = {
                     'f12': pkeyboard.Key.f12,
                     'f11': pkeyboard.Key.f11,
                     'f10': pkeyboard.Key.f10,
                     'insert': pkeyboard.Key.insert,
-                    'c': 'c',  # už ošetrené vyššie cez char
+                    'c': 'c',
                 }
                 target = key_map.get(self.current_key)
                 if target and key == target:
                     self.toggle_callback()
-            except Exception as e:
-                print(f"[Debug] On press error: {e}")
+            except Exception:
+                pass
 
         try:
             self.listener = pkeyboard.Listener(on_press=on_press)
             self.listener.start()
         except Exception as e:
-            print(f"[Hotkey] Nepodarilo sa spustiť listener: {e}")
+            print(f"[Hotkey] Chyba: {e}")
 
     def stop(self):
         if self.listener:
@@ -124,12 +183,14 @@ class HotkeyManager:
             self.listener = None
 
 
-# === GUI ===
+# =======================
+# GUI: SettingsPanel
+# =======================
 class SettingsPanel(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Custom Crosshair Designer v2.7.8")
-        self.resize(440, 640)
+        self.setWindowTitle("Custom Crosshair Designer v2.8.0")
+        self.resize(460, 720)
 
         self.overlay = CrosshairOverlay()
         self.hotkey_mgr = HotkeyManager(self.toggle_overlay_silent)
@@ -138,7 +199,7 @@ class SettingsPanel(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # Farba
+        # ===== Farba =====
         color_group = QGroupBox("🎨 Farba")
         color_layout = QHBoxLayout()
         self.color_preview = QLabel()
@@ -149,7 +210,7 @@ class SettingsPanel(QMainWindow):
         self.color_hex.setInputMask(">Hhhhhh")
         self.color_hex.textChanged.connect(self.on_hex_change)
         btn_pick = QPushButton("Vybrať...")
-        btn_pick.clicked.connect(self.pick_color_safe)  # ✅ bezpečný picker
+        btn_pick.clicked.connect(self.pick_color_safe)
 
         color_layout.addWidget(self.color_preview)
         color_layout.addWidget(self.color_hex)
@@ -157,11 +218,10 @@ class SettingsPanel(QMainWindow):
         color_group.setLayout(color_layout)
         layout.addWidget(color_group)
 
-        # === Parametre ===
+        # ===== Parametre =====
         params_group = QGroupBox("⚙️ Parametre crosshairu")
         grid = QGridLayout()
-
-        row = 0  # ✅ Explicitný riadkový čítač
+        row = 0
 
         def add_slider(name, min_v, max_v, default, callback):
             nonlocal row
@@ -180,13 +240,13 @@ class SettingsPanel(QMainWindow):
                    lambda v: self.update("arm_length", v))
         add_slider("Hrúbka", 1, 10, CONFIG["arm_thickness"],
                    lambda v: self.update("arm_thickness", v))
-        add_slider("Medzera (vnútorná veľkosť)", 0, 20, CONFIG["gap"],
+        add_slider("Medzera", 0, 20, CONFIG["gap"],
                    lambda v: self.update("gap", v))
 
         params_group.setLayout(grid)
         layout.addWidget(params_group)
 
-        # === Klávesa pre toggle ===
+        # ===== Klávesa =====
         key_group = QGroupBox("⌨️ Klávesa pre toggle")
         key_layout = QHBoxLayout()
         self.key_combo = QComboBox()
@@ -198,19 +258,37 @@ class SettingsPanel(QMainWindow):
         key_group.setLayout(key_layout)
         layout.addWidget(key_group)
 
-        # Rozšírený zoznam vrátane písmen a čísel
-        keys = [
-            "f9", "f10", "f11", "f12", "insert"
-        ]
-        #self.key_combo.addItems(keys)
-        #self.key_combo.setCurrentText(CONFIG["toggle_key"])
-        #self.key_combo.currentTextChanged.connect(self.on_key_change)
-        #key_layout.addWidget(QLabel("Stlačiť:"))
-        #key_layout.addWidget(self.key_combo)
-        #key_group.setLayout(key_layout)
-        #layout.addWidget(key_group)
+        # ===== Sloty =====
+        slots_group = QGroupBox("📁 Uložené profily")
+        slots_layout = QVBoxLayout()
 
-        # Tlačidlá
+        self.slots_list = QListWidget()
+        self.slots_list.setFixedHeight(180)
+        self.slots_list.itemDoubleClicked.connect(self.load_slot)
+        self.slots_list.itemSelectionChanged.connect(self.update_slot_buttons)
+        self.slots_list.keyPressEvent = self.slots_key_handler
+        slots_layout.addWidget(self.slots_list)
+
+        slots_btn_layout = QHBoxLayout()
+        self.btn_save_slot = QPushButton("💾 Uložiť")
+        self.btn_save_slot.clicked.connect(self.save_slot)
+        self.btn_load_slot = QPushButton("📂 Načítať")
+        self.btn_load_slot.setEnabled(False)
+        self.btn_load_slot.clicked.connect(self.load_selected_slot)
+        self.btn_delete_slot = QPushButton("🗑️")
+        self.btn_delete_slot.setFixedWidth(40)
+        self.btn_delete_slot.setEnabled(False)
+        self.btn_delete_slot.clicked.connect(self.delete_selected_slot)
+
+        slots_btn_layout.addWidget(self.btn_save_slot)
+        slots_btn_layout.addWidget(self.btn_load_slot)
+        slots_btn_layout.addWidget(self.btn_delete_slot)
+        slots_layout.addLayout(slots_btn_layout)
+
+        slots_group.setLayout(slots_layout)
+        layout.addWidget(slots_group)
+
+        # ===== Tlačidlá =====
         btn_layout = QHBoxLayout()
         self.btn_toggle = QPushButton("👁️ Zobraziť/Skryť")
         self.btn_toggle.setCheckable(True)
@@ -221,7 +299,7 @@ class SettingsPanel(QMainWindow):
         btn_layout.addWidget(btn_test)
         layout.addLayout(btn_layout)
 
-        # Joystick
+        # ===== Posun (joystick) =====
         move_group = QGroupBox("Posun (px)")
         mg = QGridLayout()
         def move(dx, dy):
@@ -230,11 +308,12 @@ class SettingsPanel(QMainWindow):
             self.overlay.refresh()
             self.lbl_pos.setText(f"X: {CONFIG['offset_x']}, Y: {CONFIG['offset_y']}")
 
-        btn_up = QPushButton("UP"); btn_up.clicked.connect(lambda: move(0, -1))
-        btn_down = QPushButton("DOWN"); btn_down.clicked.connect(lambda: move(0, +1))
-        btn_left = QPushButton("LEFT"); btn_left.clicked.connect(lambda: move(-1, 0))
-        btn_right = QPushButton("RIGHT"); btn_right.clicked.connect(lambda: move(+1, 0))
-        self.lbl_pos = QLabel("X: 0, Y: 0"); self.lbl_pos.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_up = QPushButton("↑"); btn_up.clicked.connect(lambda: move(0, -1))
+        btn_down = QPushButton("↓"); btn_down.clicked.connect(lambda: move(0, +1))
+        btn_left = QPushButton("←"); btn_left.clicked.connect(lambda: move(-1, 0))
+        btn_right = QPushButton("→"); btn_right.clicked.connect(lambda: move(+1, 0))
+        self.lbl_pos = QLabel("X: 0, Y: 0")
+        self.lbl_pos.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         mg.addWidget(btn_up, 0, 1)
         mg.addWidget(btn_left, 1, 0)
@@ -244,26 +323,177 @@ class SettingsPanel(QMainWindow):
         move_group.setLayout(mg)
         layout.addWidget(move_group)
 
-        # Reset
+        # ===== Reset =====
         btn_reset = QPushButton("↩️ Reset pozície")
         btn_reset.clicked.connect(self.reset_position)
         layout.addWidget(btn_reset)
 
-        # Info
+        # ===== Info =====
         info = QLabel(
-            "Simple usage"
-            "No admin required to start<br>"
-            "official released version</small>"
+            "<small>Simple usage • No admin required • v2.8.0<br>"
+            "Sloty sa ukladajú do <code>~/.crosshair_slots.json</code></small>"
         )
-        info.setWordWrap(True); info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info.setWordWrap(True)
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info)
 
-        # Inicializácia
+        # ===== Štýl =====
+        self.setStyleSheet("""
+            QMainWindow { background: #2a2a2a; color: white; }
+            QGroupBox { font-weight: bold; border: 1px solid #555; margin-top: 1ex; }
+            QGroupBox::title { subcontrol-origin: margin; left: 8px; }
+            QPushButton { padding: 5px 12px; }
+            QListWidget { border: 1px solid #555; background: #1e1e1e; }
+            QListWidget::item { padding: 4px; }
+            QListWidget::item:selected { background: #005f5f; }
+            QLineEdit, QComboBox { background: #333; color: white; border: 1px solid #555; }
+        """)
+
+        # ===== Inicializácia =====
         self.update_color_preview()
+        self.load_slots()
         self.hotkey_mgr.start(CONFIG["toggle_key"])
 
+    # ===== Sloty =====
+    def get_current_config_snapshot(self):
+        return {
+            "color": CONFIG["color"].name(),
+            "arm_length": CONFIG["arm_length"],
+            "arm_thickness": CONFIG["arm_thickness"],
+            "gap": CONFIG["gap"],
+            "toggle_key": CONFIG["toggle_key"],
+            "offset_x": CONFIG["offset_x"],
+            "offset_y": CONFIG["offset_y"],
+        }
+
+    def apply_config_snapshot(self, snap):
+        CONFIG["color"] = QColor(snap["color"])
+        CONFIG["arm_length"] = snap["arm_length"]
+        CONFIG["arm_thickness"] = snap["arm_thickness"]
+        CONFIG["gap"] = snap["gap"]
+        CONFIG["toggle_key"] = snap["toggle_key"]
+        CONFIG["offset_x"] = snap["offset_x"]
+        CONFIG["offset_y"] = snap["offset_y"]
+        self.update_color_preview()
+        self.key_combo.setCurrentText(snap["toggle_key"])
+        self.lbl_pos.setText(f"X: {CONFIG['offset_x']}, Y: {CONFIG['offset_y']}")
+        self.overlay.refresh()
+
+    def save_slot(self):
+        snap = self.get_current_config_snapshot()
+        i = 1
+        while True:
+            name = f"crosshair_{i}"
+            if not any(self.slots_list.item(j).data(Qt.ItemDataRole.UserRole).get("name") == name
+                       for j in range(self.slots_list.count())):
+                break
+            i += 1
+
+        self._add_slot_item(name, snap)
+        self.save_slots()
+
+    def _add_slot_item(self, name, snap):
+        widget = QWidget()
+        hlayout = QHBoxLayout(widget)
+        hlayout.setContentsMargins(6, 3, 6, 3)
+
+        preview = CrosshairPreviewWidget(snap, size=48)
+        label = QLabel(name)
+        label.setStyleSheet("font-weight: bold;")
+
+        hlayout.addWidget(preview)
+        hlayout.addWidget(label, 1)
+
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, {"name": name, **snap})
+        item.setSizeHint(widget.sizeHint())
+        self.slots_list.addItem(item)
+        self.slots_list.setItemWidget(item, widget)
+
+    def load_slot(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        self.apply_config_snapshot(data)
+
+    def load_selected_slot(self):
+        items = self.slots_list.selectedItems()
+        if items:
+            self.load_slot(items[0])
+
+    def delete_selected_slot(self):
+        items = self.slots_list.selectedItems()
+        if items:
+            row = self.slots_list.row(items[0])
+            self.slots_list.takeItem(row)
+            self.save_slots()
+            self.update_slot_buttons()
+
+    def update_slot_buttons(self):
+        has_sel = bool(self.slots_list.selectedItems())
+        self.btn_load_slot.setEnabled(has_sel)
+        self.btn_delete_slot.setEnabled(has_sel)
+
+    def slots_key_handler(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.load_selected_slot()
+        elif event.key() == Qt.Key.Key_Delete:
+            self.delete_selected_slot()
+        else:
+            # Forward to default handler
+            QListWidget.keyPressEvent(self.slots_list, event)
+
+    def load_slots(self):
+        # ✅ Vytvor priečinok, ak neexistuje
+        try:
+            SLOTS_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"[Sloty] Nepodarilo sa vytvoriť priečinok {SLOTS_DIR}: {e}")
+            # Pokračuj, len ukladanie bude nefunkčné
+
+        self.slots_list.clear()
+        if SLOTS_FILE.exists():
+            try:
+                with open(SLOTS_FILE, 'r', encoding='utf-8') as f:
+                    slots = json.load(f)
+                for name, snap in slots.items():
+                    self._add_slot_item(name, snap)
+            except Exception as e:
+                print(f"[Sloty] Chyba pri načítaní {SLOTS_FILE}: {e}")
+        # Ak žiadne sloty, vytvor Default
+        if self.slots_list.count() == 0:
+            default_snap = {
+                "color": "#67FF26",
+                "arm_length": 12,
+                "arm_thickness": 2,
+                "gap": 4,
+                "toggle_key": "c",
+                "offset_x": 0,
+                "offset_y": 0,
+            }
+            self._add_slot_item("Default Green", default_snap)
+            self.save_slots()  # teraz už vie ukladať do C:\krosherG\
+
+    def save_slots(self):
+        try:
+            SLOTS_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"[Sloty] Nepodarilo sa zabezpečiť priečinok {SLOTS_DIR}: {e}")
+            return
+
+        slots = {}
+        for i in range(self.slots_list.count()):
+            item = self.slots_list.item(i)
+            data = item.data(Qt.ItemDataRole.UserRole)
+            name = data.pop("name")
+            slots[name] = data
+        try:
+            with open(SLOTS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(slots, f, indent=2)
+            print(f"[✓] Sloty uložené do: {SLOTS_FILE}")
+        except Exception as e:
+            print(f"[Sloty] Chyba pri ukladaní do {SLOTS_FILE}: {e}")
+
+    # ===== UI Callbacks =====
     def pick_color_safe(self):
-        # Použi nepodvláknuvý mód (Qt.Dialog) pre väčšiu stabilitu
         dialog = QColorDialog(CONFIG["color"], self)
         dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
         if dialog.exec():
@@ -279,14 +509,11 @@ class SettingsPanel(QMainWindow):
 
     def on_hex_change(self, text):
         if len(text) == 7 and text[0] == '#':
-            try:
-                c = QColor(text)
-                if c.isValid():
-                    CONFIG["color"] = c
-                    self.overlay.refresh()
-                    self.color_preview.setStyleSheet(f"background: {text}; border:1px solid #555;")
-            except:
-                pass
+            c = QColor(text)
+            if c.isValid():
+                CONFIG["color"] = c
+                self.overlay.refresh()
+                self.color_preview.setStyleSheet(f"background: {text}; border:1px solid #555;")
 
     def update(self, key, value):
         CONFIG[key] = value
@@ -294,18 +521,18 @@ class SettingsPanel(QMainWindow):
 
     def on_key_change(self, key):
         CONFIG["toggle_key"] = key
-        self.hotkey_mgr.start(key)  # ✅ reštartuje listener s novou klávesou
+        self.hotkey_mgr.start(key)
 
     def toggle_overlay(self):
         self.overlay.setVisible(not self.overlay.isVisible())
         self.btn_toggle.setChecked(self.overlay.isVisible())
 
     def toggle_overlay_silent(self):
-        # Volané z globálneho hotkeyu (pynput beží v inom vlákne → musíme ísť cez Qt)
         QTimer.singleShot(0, self.toggle_overlay)
 
     def test_overlay(self):
-        self.overlay.show(); self.btn_toggle.setChecked(True)
+        self.overlay.show()
+        self.btn_toggle.setChecked(True)
         QTimer.singleShot(2000, lambda: (self.overlay.hide(), self.btn_toggle.setChecked(False)))
 
     def reset_position(self):
@@ -316,20 +543,20 @@ class SettingsPanel(QMainWindow):
     def closeEvent(self, event):
         self.hotkey_mgr.stop()
         self.overlay.close()
+        self.save_slots()
         event.accept()
 
 
-# ===== HLAVNÝ PROGRAM =====
+# =======================
+# MAIN
+# =======================
 if __name__ == "__main__":
-    # Nainštaluj pynput, ak chýba: pip install pynput
-    try:
-        import pynput
-    except ImportError:
+    if not pkeyboard:
         print("❌ Chýba 'pynput'. Nainštaluj: pip install pynput")
         sys.exit(1)
 
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")  # stabilnejší vzhľad
+    app.setStyle("Fusion")
 
     win = SettingsPanel()
     win.show()
