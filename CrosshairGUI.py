@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QColor, QPixmap, QPainter, QBrush
-
+from PyQt6.QtCore import QRectF
 # =======================
 # CONFIG + TRVALÉ ÚDAJE
 # =======================
@@ -57,8 +57,33 @@ class CrosshairOverlay(QWidget):
         self.setFixedSize(size, size)
         self.move(center_x - size // 2, center_y - size // 2)
 
+#    def paintEvent(self, event):
+#        from PyQt6.QtGui import QPainter, QBrush
+#        painter = QPainter(self)
+#        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+#        painter.setPen(Qt.PenStyle.NoPen)
+#
+#        c = CONFIG["color"]
+#        al = CONFIG["arm_length"]
+#        th = CONFIG["arm_thickness"]
+#        gap = CONFIG["gap"]
+#        center = self.width() // 2
+#        half = th // 2
+#
+#        painter.setBrush(QBrush(c))
+#
+#        # Ľavý
+#        painter.drawRect(center - gap - al, center - half, al, th)
+#        # Pravý
+#        painter.drawRect(center + gap, center - half, al, th)
+#        # Horný
+#        painter.drawRect(center - half, center - gap - al, th, al)
+#        # Dolný
+#        painter.drawRect(center - half, center + gap, th, al)
+
     def paintEvent(self, event):
-        from PyQt6.QtGui import QPainter, QBrush
+        from PyQt6.QtCore import QRectF  # Ak ešte nie je importované, pridaj to tu alebo na začiatok súboru
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -67,19 +92,23 @@ class CrosshairOverlay(QWidget):
         al = CONFIG["arm_length"]
         th = CONFIG["arm_thickness"]
         gap = CONFIG["gap"]
-        center = self.width() // 2
-        half = th // 2
+        center = self.width() / 2.0  # float pre presnosť
 
         painter.setBrush(QBrush(c))
 
-        # Ľavý
-        painter.drawRect(center - gap - al, center - half, al, th)
-        # Pravý
-        painter.drawRect(center + gap, center - half, al, th)
-        # Horný
-        painter.drawRect(center - half, center - gap - al, th, al)
-        # Dolný
-        painter.drawRect(center - half, center + gap, th, al)
+        # Horizontálne ramená
+        y_top = center - th / 2.0
+        left_rect = QRectF(center - gap - al, y_top, al, th)
+        right_rect = QRectF(center + gap, y_top, al, th)
+        painter.drawRect(left_rect)
+        painter.drawRect(right_rect)
+
+        # Vertikálne ramená
+        x_left = center - th / 2.0
+        top_rect = QRectF(x_left, center - gap - al, th, al)
+        bottom_rect = QRectF(x_left, center + gap, th, al)
+        painter.drawRect(top_rect)
+        painter.drawRect(bottom_rect)
 
     def refresh(self):
         self.update_geometry()
@@ -516,6 +545,17 @@ class SettingsPanel(QMainWindow):
                 self.color_preview.setStyleSheet(f"background: {text}; border:1px solid #555;")
 
     def update(self, key, value):
+        if key == "arm_thickness":
+            if value % 2 == 1:
+                value += 1
+                # Nájdeme slider pre hrúbku a aktualizujeme ho
+                for slider in self.findChildren(QSlider):
+                    if slider.value() != value:  # ak sa hodnota zmenila
+                        slider.blockSignals(True)
+                        slider.setValue(value)
+                        slider.blockSignals(False)
+                        break
+
         CONFIG[key] = value
         self.overlay.refresh()
 
